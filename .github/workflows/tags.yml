@@ -1,129 +1,134 @@
-# This workflow builds stable releases
-
-name: Build stable release
-
-on:
-  push:
-    branches:
-      - "!master" # Ignore the master branch
-    tags:
-      - "*"
-
 jobs:
   build:
-    if: "!contains(github.event.head_commit.message, 'skip ci')"
-    runs-on: ubuntu-22.04
+    if: '!contains(github.event.head_commit.message, ''skip ci'')'
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      uses: actions/checkout@v3
+    - continue-on-error: true
+      uses: actions/cache@v3
+      with:
+        key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+        path: ~/.m2/repository
+        restore-keys: '${{ runner.os }}-maven-
+
+          '
+    - continue-on-error: true
+      name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        distribution: temurin
+        java-version: '17'
+    - continue-on-error: true
+      id: vars
+      name: Set the VERSION
+      run: 'echo "VERSION=$(echo ${GITHUB_REF:10})" >> $GITHUB_OUTPUT
+
+        echo "VERSION=${{steps.vars.outputs.VERSION}}"
+
+        '
+    - continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      name: Build and Test
+      run: mvn -B verify -Dmongodb.version="${{ matrix.mongodb-version }}" -Dkarate.options="${{
+        matrix.karate-options }}"
+    - continue-on-error: true
+      if: ${{ matrix.deploy }}
+      name: Set up QEMU
+      uses: docker/setup-qemu-action@v2
+    - continue-on-error: true
+      if: ${{ matrix.deploy }}
+      name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    - continue-on-error: true
+      if: ${{ matrix.deploy }}
+      name: Login to DockerHub
+      uses: docker/login-action@v2
+      with:
+        password: ${{ secrets.DOCKER_TOKEN }}
+        username: ${{ secrets.DOCKER_USER }}
+    - continue-on-error: true
+      if: ${{ matrix.deploy }}
+      name: Build and Push multi-arch Docker images
+      uses: docker/build-push-action@v4
+      with:
+        context: ./core/
+        platforms: linux/amd64,linux/arm64,linux/ppc64le,linux/s390x,linux/arm/v7
+        pull: true
+        push: false
+        tags: softinstigate/restheart:${{steps.vars.outputs.VERSION}}
+    - continue-on-error: true
+      if: ${{ matrix.deploy }}
+      name: Build and Push GraalVM Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: ./core/
+        file: ./core/Dockerfile.graalvm
+        pull: true
+        push: false
+        tags: softinstigate/restheart:${{steps.vars.outputs.VERSION}}-graalvm
+    - continue-on-error: true
+      if: ${{ matrix.deploy }}
+      name: Build and Push distroless docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: ./core/
+        file: ./core/Dockerfile.distroless
+        pull: true
+        push: false
+        tags: softinstigate/restheart:${{steps.vars.outputs.VERSION}}-distroless
+    - continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      if: ${{ matrix.deploy }}
+      name: Upload GitHub release
+      uses: softprops/action-gh-release@v1
+      with:
+        body: 'Release ${{ github.ref }}
+
+          '
+        draft: true
+        files: 'core/target/restheart.tar.gz
+
+          core/target/restheart.zip
+
+          core/target/restheart.jar
+
+          '
+        prerelease: false
+    - continue-on-error: true
+      env:
+        GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      if: ${{ matrix.deploy }}
+      name: Import private gpg key
+      run: 'printf "%s" "$GPG_PRIVATE_KEY" > private.key
+
+        gpg --pinentry-mode=loopback --batch --yes --fast-import private.key
+
+        '
+    - continue-on-error: true
+      env:
+        GPG_KEY_NAME: ${{ secrets.GPG_KEY_NAME }}
+        GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
+        OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+      if: ${{ matrix.deploy }}
+      name: Deploy to Maven Central
+      run: MAVEN_OPTS="--add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
+        --add-opens=java.base/java.text=ALL-UNNAMED --add-opens=java.desktop/java.awt.font=ALL-UNNAMED"
+        mvn -B clean deploy -Pdeploy -DskipTests -s settings.xml
     strategy:
       matrix:
         include:
-          - mongodb-version: 4.2
-          - mongodb-version: 4.4
-          - mongodb-version: 5.0
-          - mongodb-version: 6.0
-            deploy: true
-          - mongodb-version: 7.0
+        - mongodb-version: 4.2
+        - mongodb-version: 4.4
+        - mongodb-version: 5.0
+        - deploy: true
+          mongodb-version: 6.0
+        - mongodb-version: 7.0
     timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/cache@v3
-        with:
-          path: ~/.m2/repository
-          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            ${{ runner.os }}-maven-
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v3
-        with:
-          distribution: "temurin"
-          java-version: "17"
-
-      - name: Set the VERSION
-        id: vars
-        run: |
-          echo "VERSION=$(echo ${GITHUB_REF:10})" >> $GITHUB_OUTPUT
-          echo "VERSION=${{steps.vars.outputs.VERSION}}"
-
-      - name: Build and Test
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Needed to get PR information, if any
-        run: mvn -B verify -Dmongodb.version="${{ matrix.mongodb-version }}" -Dkarate.options="${{ matrix.karate-options }}"
-
-      - name: Set up QEMU
-        if: ${{ matrix.deploy }}
-        uses: docker/setup-qemu-action@v2
-
-      - name: Set up Docker Buildx
-        if: ${{ matrix.deploy }}
-        uses: docker/setup-buildx-action@v2
-
-      - name: Login to DockerHub
-        if: ${{ matrix.deploy }}
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_TOKEN }}
-
-      - name: Build and Push multi-arch Docker images
-        if: ${{ matrix.deploy }}
-        uses: docker/build-push-action@v4
-        with:
-          context: ./core/
-          platforms: linux/amd64,linux/arm64,linux/ppc64le,linux/s390x,linux/arm/v7
-          push: true # push all images built
-          pull: true # pull all required images before building
-          tags: softinstigate/restheart:${{steps.vars.outputs.VERSION}}
-
-      - name: Build and Push GraalVM Docker image
-        if: ${{ matrix.deploy }}
-        uses: docker/build-push-action@v4
-        with:
-          context: ./core/
-          file: ./core/Dockerfile.graalvm
-          push: true # push all images built
-          pull: true # pull all required images before building
-          tags: softinstigate/restheart:${{steps.vars.outputs.VERSION}}-graalvm
-
-      - name: Build and Push distroless docker image
-        if: ${{ matrix.deploy }}
-        uses: docker/build-push-action@v4
-        with:
-          context: ./core/
-          file: ./core/Dockerfile.distroless
-          push: true # push all images built
-          pull: true # pull all required images before building
-          tags: softinstigate/restheart:${{steps.vars.outputs.VERSION}}-distroless
-
-      - name: Upload GitHub release
-        if: ${{ matrix.deploy }}
-        uses: softprops/action-gh-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          body: |
-            Release ${{ github.ref }}
-          files: |
-            core/target/restheart.tar.gz
-            core/target/restheart.zip
-            core/target/restheart.jar
-          draft: true
-          prerelease: false
-
-      - name: Import private gpg key
-        if: ${{ matrix.deploy }}
-        run: |
-          printf "%s" "$GPG_PRIVATE_KEY" > private.key
-          gpg --pinentry-mode=loopback --batch --yes --fast-import private.key
-        continue-on-error: true
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-
-      - name: Deploy to Maven Central
-        if: ${{ matrix.deploy }}
-        run: MAVEN_OPTS="--add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.text=ALL-UNNAMED --add-opens=java.desktop/java.awt.font=ALL-UNNAMED" mvn -B clean deploy -Pdeploy -DskipTests -s settings.xml
-        continue-on-error: true
-        env:
-          OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
-          OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
-          GPG_KEY_NAME: ${{ secrets.GPG_KEY_NAME }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+name: Build stable release
+on:
+  repository_dispatch:
+    types: trigger-ga___tags.yml
